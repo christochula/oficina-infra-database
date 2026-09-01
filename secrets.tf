@@ -48,13 +48,13 @@ resource "aws_secretsmanager_secret" "connection" {
 resource "aws_secretsmanager_secret_version" "connection" {
   secret_id = aws_secretsmanager_secret.connection.id
   secret_string = jsonencode({
-    username    = var.db_username
-    password    = random_password.database.result
-    engine      = "postgres"
-    host        = aws_db_proxy.database.endpoint
-    port        = var.db_port
-    dbname      = var.db_name
-    url         = local.prisma_proxy_url
+    username = var.db_username
+    password = random_password.database.result
+    engine   = "postgres"
+    host     = aws_db_proxy.database.endpoint
+    port     = var.db_port
+    dbname   = var.db_name
+    url      = local.prisma_proxy_url
   })
 
   depends_on = [aws_db_proxy_target.database]

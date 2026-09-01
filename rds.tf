@@ -106,7 +106,7 @@ resource "aws_db_instance" "database" {
 
   auto_minor_version_upgrade  = var.auto_minor_version_upgrade
   allow_major_version_upgrade = false
-  apply_immediately            = var.apply_immediately
+  apply_immediately           = var.apply_immediately
 
   performance_insights_enabled          = true
   performance_insights_kms_key_id       = aws_kms_key.database.arn
