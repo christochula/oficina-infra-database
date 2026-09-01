@@ -1,0 +1,137 @@
+name: Terraform Deploy
+
+on:
+  push:
+    branches:
+      - homolog
+      - main
+    paths:
+      - "**/*.tf"
+      - "**/*.tfvars.example"
+      - "**/*.tfbackend.example"
+      - ".github/workflows/**"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub Environment to deploy
+        required: true
+        type: choice
+        options:
+          - homolog
+          - production
+
+permissions:
+  contents: read
+
+concurrency:
+  group: database-deploy-${{ (github.event_name == 'workflow_dispatch' && inputs.environment) || (github.ref_name == 'main' && 'production') || 'homolog' }}
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  TF_VERSION: "1.10.5"
+  DEPLOY_ENVIRONMENT: ${{ (github.event_name == 'workflow_dispatch' && inputs.environment) || (github.ref_name == 'main' && 'production') || 'homolog' }}
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    environment:
+      name: ${{ (github.event_name == 'workflow_dispatch' && inputs.environment) || (github.ref_name == 'main' && 'production') || 'homolog' }}
+
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      TF_STATE_KEY: ${{ vars.TF_STATE_KEY }}
+      TF_STATE_KMS_KEY_ARN: ${{ vars.TF_STATE_KMS_KEY_ARN }}
+      TFVARS_JSON: ${{ vars.TFVARS_JSON }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enforce branch-to-environment mapping
+        shell: bash
+        run: |
+          if [[ "${DEPLOY_ENVIRONMENT}" == "production" && "${GITHUB_REF_NAME}" != "main" ]]; then
+            echo "::error::Production deploys must run from main."
+            exit 1
+          fi
+          if [[ "${DEPLOY_ENVIRONMENT}" == "homolog" && "${GITHUB_REF_NAME}" != "homolog" ]]; then
+            echo "::error::Homolog deploys must run from homolog."
+            exit 1
+          fi
+
+      - name: Check required GitHub Environment variables
+        shell: bash
+        run: |
+          required=(
+            AWS_REGION AWS_DEPLOY_ROLE_ARN TF_STATE_BUCKET TF_STATE_KEY
+            TFVARS_JSON
+          )
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Missing GitHub Environment variable: ${name}"
+              exit 1
+            fi
+          done
+
+      - name: Materialize environment tfvars
+        shell: bash
+        run: |
+          printf '%s\n' "${TFVARS_JSON}" > "${RUNNER_TEMP}/environment.auto.tfvars.json"
+          jq -e 'type == "object"' "${RUNNER_TEMP}/environment.auto.tfvars.json" > /dev/null
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: github-database-deploy-${{ github.run_id }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Check formatting
+        run: terraform fmt -check -recursive -diff
+
+      - name: Initialize remote state
+        shell: bash
+        run: |
+          backend_args=(
+            -backend-config="bucket=${TF_STATE_BUCKET}"
+            -backend-config="key=${TF_STATE_KEY}"
+            -backend-config="region=${AWS_REGION}"
+          )
+          if [[ -n "${TF_STATE_KMS_KEY_ARN:-}" ]]; then
+            backend_args+=(-backend-config="kms_key_id=${TF_STATE_KMS_KEY_ARN}")
+          fi
+          terraform init -input=false "${backend_args[@]}"
+
+      - name: Validate configuration
+        run: terraform validate -no-color
+
+      - name: Create reviewed plan
+        run: terraform plan -input=false -lock-timeout=5m -no-color -out=tfplan -var-file="${RUNNER_TEMP}/environment.auto.tfvars.json"
+
+      - name: Apply plan
+        run: terraform apply -input=false -lock-timeout=5m -auto-approve tfplan
+
+      - name: Publish non-secret endpoints
+        shell: bash
+        run: |
+          {
+            echo "### Database deployment"
+            echo ""
+            echo "- Environment: ${DEPLOY_ENVIRONMENT}"
+            echo "- RDS endpoint: $(terraform output -raw db_endpoint)"
+            echo "- RDS Proxy endpoint: $(terraform output -raw proxy_endpoint)"
+            echo "- Connection secret: $(terraform output -raw secret_name)"
+          } >> "${GITHUB_STEP_SUMMARY}"
