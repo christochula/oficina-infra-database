@@ -58,8 +58,11 @@ resource "aws_db_instance" "database" {
   storage_encrypted     = true
   # Sem CMK: usa a chave gerenciada aws/rds (nao exige permissao de KMS).
 
-  multi_az               = false
-  publicly_accessible    = false
+  multi_az = false
+  # AWS Academy: a Lambda de autenticacao roda fora de VPC. Endpoint publico
+  # com TLS forcado (rds.force_ssl=1) e senha aleatoria de 32 chars. O SG ainda
+  # restringe a origem. Em ambiente real: RDS privado + Lambda em VPC.
+  publicly_accessible    = true
   db_subnet_group_name   = aws_db_subnet_group.database.name
   vpc_security_group_ids = [aws_security_group.database.id]
   parameter_group_name   = aws_db_parameter_group.database.name

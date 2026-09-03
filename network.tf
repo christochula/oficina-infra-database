@@ -25,12 +25,16 @@ resource "aws_security_group" "database" {
   description = "Acesso PostgreSQL para ${local.name_prefix} a partir da VPC"
   vpc_id      = data.aws_vpc.default.id
 
+  # AWS Academy: os pods do EKS (na VPC) e a Lambda de autenticacao (fora de
+  # VPC, IP publico da AWS) precisam alcancar o RDS. TLS e forcado no parameter
+  # group e a senha e aleatoria de 32 chars. Em ambiente real: apenas o CIDR
+  # da VPC / SG dos workloads.
   ingress {
-    description = "PostgreSQL de workloads na VPC (EKS, Lambda)"
+    description = "PostgreSQL (pods EKS na VPC + Lambda de auth fora de VPC)"
     from_port   = var.db_port
     to_port     = var.db_port
     protocol    = "tcp"
-    cidr_blocks = [data.aws_vpc.default.cidr_block]
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   egress {

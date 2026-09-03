@@ -32,6 +32,9 @@ resource "aws_secretsmanager_secret_version" "connection" {
     port     = var.db_port
     dbname   = var.db_name
     sslmode  = "require"
-    url      = local.prisma_url
+    # A Lambda de auth valida a cadeia TLS do RDS. Sem bundlar a CA do RDS,
+    # a conexao usa TLS sem verificar o certificado (aceitavel no lab).
+    ssl_reject_unauthorized = false
+    url                     = local.prisma_url
   })
 }
