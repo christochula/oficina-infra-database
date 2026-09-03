@@ -1,75 +1,44 @@
-resource "aws_db_subnet_group" "database" {
-  name        = "${local.name_prefix}-database"
-  description = "Private subnets for ${local.name_prefix} RDS and RDS Proxy"
-  subnet_ids  = var.private_subnet_ids
+# AWS Academy: usa a VPC default (mesma do cluster EKS). O RDS aceita conexao
+# de qualquer workload dentro do CIDR da VPC (pods do EKS e Lambda).
 
-  tags = {
-    Name = "${local.name_prefix}-database"
+data "aws_vpc" "default" {
+  default = true
+}
+
+data "aws_subnets" "default" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
   }
 }
 
-resource "aws_security_group" "proxy" {
-  name                   = "${local.name_prefix}-database-proxy"
-  description            = "Approved workload access to ${local.name_prefix} RDS Proxy"
-  vpc_id                 = var.vpc_id
-  revoke_rules_on_delete = true
+resource "aws_db_subnet_group" "database" {
+  name        = "${local.name_prefix}-db"
+  description = "Subnets da VPC default para o RDS ${local.name_prefix}"
+  subnet_ids  = data.aws_subnets.default.ids
 
-  tags = {
-    Name = "${local.name_prefix}-database-proxy"
-  }
+  tags = { Name = "${local.name_prefix}-db" }
 }
 
 resource "aws_security_group" "database" {
-  name                   = "${local.name_prefix}-database"
-  description            = "PostgreSQL access for ${local.name_prefix}; security-group references only"
-  vpc_id                 = var.vpc_id
-  revoke_rules_on_delete = true
+  name        = "${local.name_prefix}-database"
+  description = "Acesso PostgreSQL para ${local.name_prefix} a partir da VPC"
+  vpc_id      = data.aws_vpc.default.id
 
-  tags = {
-    Name = "${local.name_prefix}-database"
+  ingress {
+    description = "PostgreSQL de workloads na VPC (EKS, Lambda)"
+    from_port   = var.db_port
+    to_port     = var.db_port
+    protocol    = "tcp"
+    cidr_blocks = [data.aws_vpc.default.cidr_block]
   }
-}
 
-resource "aws_vpc_security_group_ingress_rule" "allowed_clients" {
-  for_each = var.allowed_security_group_ids
-
-  security_group_id            = aws_security_group.proxy.id
-  referenced_security_group_id = each.value
-  description                  = "PostgreSQL from approved workload security group ${each.value}"
-  from_port                    = var.db_port
-  to_port                      = var.db_port
-  ip_protocol                  = "tcp"
-
-  lifecycle {
-    create_before_destroy = true
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
   }
-}
 
-# The database accepts PostgreSQL only from the dedicated proxy security group.
-resource "aws_vpc_security_group_ingress_rule" "proxy_to_database" {
-  security_group_id            = aws_security_group.database.id
-  referenced_security_group_id = aws_security_group.proxy.id
-  description                  = "RDS Proxy to RDS PostgreSQL"
-  from_port                    = var.db_port
-  to_port                      = var.db_port
-  ip_protocol                  = "tcp"
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-# New security groups have their default allow-all egress removed by the AWS
-# provider. This rule permits only the proxy-to-database data path.
-resource "aws_vpc_security_group_egress_rule" "proxy_to_database" {
-  security_group_id            = aws_security_group.proxy.id
-  referenced_security_group_id = aws_security_group.database.id
-  description                  = "RDS Proxy to RDS PostgreSQL"
-  from_port                    = var.db_port
-  to_port                      = var.db_port
-  ip_protocol                  = "tcp"
-
-  lifecycle {
-    create_before_destroy = true
-  }
+  tags = { Name = "${local.name_prefix}-database" }
 }

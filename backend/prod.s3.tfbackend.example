@@ -1,8 +1,0 @@
-# The bucket and optional KMS key must already exist. Enable bucket versioning,
-# block all public access and restrict this object prefix to the deploy role.
-bucket = "replace-with-terraform-state-bucket"
-key    = "oficina/database/production/terraform.tfstate"
-region = "us-east-1"
-
-# Recommended when the state bucket uses a customer-managed state key:
-# kms_key_id = "arn:aws:kms:us-east-1:123456789012:key/replace-me"
