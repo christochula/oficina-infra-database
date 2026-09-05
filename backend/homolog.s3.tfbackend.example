@@ -1,8 +1,0 @@
-# The bucket and optional KMS key must already exist. Do not reuse the database
-# KMS key because the backend is initialized before this stack is created.
-bucket = "replace-with-terraform-state-bucket"
-key    = "oficina/database/homolog/terraform.tfstate"
-region = "us-east-1"
-
-# Recommended when the state bucket uses a customer-managed state key:
-# kms_key_id = "arn:aws:kms:us-east-1:123456789012:key/replace-me"

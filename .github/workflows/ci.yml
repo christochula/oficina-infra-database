@@ -2,32 +2,28 @@ name: Terraform CI
 
 on:
   pull_request:
-    branches:
-      - homolog
-      - main
-    paths:
-      - "**/*.tf"
-      - "**/*.tfvars.example"
-      - "**/*.tfbackend.example"
-      - ".github/workflows/**"
+    branches: [main]
+  push:
+    branches-ignore: [main]
 
 permissions:
   contents: read
 
 concurrency:
-  group: database-plan-${{ github.event.pull_request.base.ref }}-${{ github.event.pull_request.number }}
+  group: database-ci-${{ github.ref }}
   cancel-in-progress: true
 
 env:
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
-  TF_VERSION: "1.10.5"
+  AWS_REGION: us-east-1
+  TF_VAR_aws_region: us-east-1
+  TF_VAR_environment: homolog
 
 jobs:
   validate:
     name: Validate
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,7 +31,7 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: ${{ env.TF_VERSION }}
+          terraform_version: 1.16.0
 
       - name: Check formatting
         run: terraform fmt -check -recursive -diff
@@ -49,70 +45,37 @@ jobs:
   plan:
     name: Plan
     needs: validate
-    if: github.event.pull_request.head.repo.full_name == github.repository
-    permissions:
-      contents: read
-      id-token: write
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    environment:
-      name: ${{ github.base_ref == 'main' && 'production' || 'homolog' }}
-
-    env:
-      AWS_REGION: ${{ vars.AWS_REGION }}
-      AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
-      TF_STATE_KEY: ${{ vars.TF_STATE_KEY }}
-      TF_STATE_KMS_KEY_ARN: ${{ vars.TF_STATE_KMS_KEY_ARN }}
-      TFVARS_JSON: ${{ vars.TFVARS_JSON }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check required GitHub Environment variables
-        shell: bash
-        run: |
-          required=(
-            AWS_REGION AWS_DEPLOY_ROLE_ARN TF_STATE_BUCKET TF_STATE_KEY
-            TFVARS_JSON
-          )
-          for name in "${required[@]}"; do
-            if [[ -z "${!name:-}" ]]; then
-              echo "::error::Missing GitHub Environment variable: ${name}"
-              exit 1
-            fi
-          done
-
-      - name: Materialize environment tfvars
-        shell: bash
-        run: |
-          printf '%s\n' "${TFVARS_JSON}" > "${RUNNER_TEMP}/environment.auto.tfvars.json"
-          jq -e 'type == "object"' "${RUNNER_TEMP}/environment.auto.tfvars.json" > /dev/null
-
-      - name: Configure AWS credentials with OIDC
+      - name: Configure AWS credentials (AWS Academy session keys)
         uses: aws-actions/configure-aws-credentials@v4
         with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
-          role-session-name: github-database-plan-${{ github.run_id }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: ${{ env.TF_VERSION }}
+          terraform_version: 1.16.0
 
-      - name: Initialize remote state
-        shell: bash
+      - name: Resolve state backend
+        id: backend
         run: |
-          backend_args=(
-            -backend-config="bucket=${TF_STATE_BUCKET}"
-            -backend-config="key=${TF_STATE_KEY}"
-            -backend-config="region=${AWS_REGION}"
-          )
-          if [[ -n "${TF_STATE_KMS_KEY_ARN:-}" ]]; then
-            backend_args+=(-backend-config="kms_key_id=${TF_STATE_KMS_KEY_ARN}")
-          fi
-          terraform init -input=false "${backend_args[@]}"
+          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+          echo "bucket=oficina-tc3-tfstate-${ACCOUNT_ID}" >> "$GITHUB_OUTPUT"
 
       - name: Terraform plan
-        run: terraform plan -input=false -lock-timeout=5m -no-color -out=tfplan -var-file="${RUNNER_TEMP}/environment.auto.tfvars.json"
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ steps.backend.outputs.bucket }}" \
+            -backend-config="key=oficina/database/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+          terraform plan -input=false -lock-timeout=5m -no-color

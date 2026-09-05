@@ -1,40 +1,20 @@
 resource "random_password" "database" {
-  length           = var.password_length
-  special          = true
-  min_lower        = 6
-  min_upper        = 6
-  min_numeric      = 6
-  min_special      = 6
-  override_special = "!#$%&*+-.:;<=>?[]^_{|}~"
+  length      = var.password_length
+  special     = true
+  min_lower   = 6
+  min_upper   = 6
+  min_numeric = 6
+  min_special = 6
+  # Sem caracteres que quebram a URL Prisma / clientes pg.
+  override_special = "!#%*+-.:=?_~"
 }
 
-# This internal secret is deliberately independent of the proxy endpoint. RDS
-# Proxy needs it during creation, which avoids a proxy <-> secret cycle.
-resource "aws_secretsmanager_secret" "proxy_auth" {
-  name                    = local.proxy_auth_secret_name
-  description             = "Internal credential source for ${local.name_prefix} RDS Proxy"
-  kms_key_id              = aws_kms_key.database.arn
-  recovery_window_in_days = var.secret_recovery_window_in_days
-
-  tags = {
-    Name    = "${local.name_prefix}-database-proxy-auth"
-    Purpose = "RDSProxyAuthentication"
-  }
-}
-
-resource "aws_secretsmanager_secret_version" "proxy_auth" {
-  secret_id = aws_secretsmanager_secret.proxy_auth.id
-  secret_string = jsonencode({
-    username = var.db_username
-    password = random_password.database.result
-  })
-}
-
+# Secret unico entregue a aplicacao (oficina-api) e a Lambda de autenticacao
+# (oficina-auth-serverless). Contem host/port/dbname/user/pass e a URL Prisma.
 resource "aws_secretsmanager_secret" "connection" {
   name                    = local.connection_secret_name
-  description             = "TLS PostgreSQL connection data for ${local.name_prefix} applications"
-  kms_key_id              = aws_kms_key.database.arn
-  recovery_window_in_days = var.secret_recovery_window_in_days
+  description             = "Dados de conexao PostgreSQL para as aplicacoes ${local.name_prefix}"
+  recovery_window_in_days = 0
 
   tags = {
     Name    = "${local.name_prefix}-database-connection"
@@ -42,20 +22,19 @@ resource "aws_secretsmanager_secret" "connection" {
   }
 }
 
-# The application secret is created after the proxy. Its required host and url
-# fields therefore point to the TLS-only proxy. Direct RDS connection material is
-# deliberately excluded from the application secret.
 resource "aws_secretsmanager_secret_version" "connection" {
   secret_id = aws_secretsmanager_secret.connection.id
   secret_string = jsonencode({
     username = var.db_username
     password = random_password.database.result
     engine   = "postgres"
-    host     = aws_db_proxy.database.endpoint
+    host     = aws_db_instance.database.address
     port     = var.db_port
     dbname   = var.db_name
-    url      = local.prisma_proxy_url
+    sslmode  = "require"
+    # A Lambda de auth valida a cadeia TLS do RDS. Sem bundlar a CA do RDS,
+    # a conexao usa TLS sem verificar o certificado (aceitavel no lab).
+    ssl_reject_unauthorized = false
+    url                     = local.prisma_url
   })
-
-  depends_on = [aws_db_proxy_target.database]
 }
