@@ -21,6 +21,7 @@ env:
 
 jobs:
   deploy:
+    environment: homolog
     name: Deploy RDS
     runs-on: ubuntu-latest
     steps:
@@ -62,6 +63,8 @@ jobs:
             -backend-config="region=${AWS_REGION}" \
             -backend-config="encrypt=true" \
             -backend-config="use_lockfile=true"
+          terraform validate -no-color
+          terraform fmt -check -recursive
           terraform validate -no-color
           terraform apply -input=false -lock-timeout=5m -auto-approve
 

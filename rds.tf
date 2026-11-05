@@ -59,10 +59,8 @@ resource "aws_db_instance" "database" {
   # Sem CMK: usa a chave gerenciada aws/rds (nao exige permissao de KMS).
 
   multi_az = false
-  # AWS Academy: a Lambda de autenticacao roda fora de VPC. Endpoint publico
-  # com TLS forcado (rds.force_ssl=1) e senha aleatoria de 32 chars. O SG ainda
-  # restringe a origem. Em ambiente real: RDS privado + Lambda em VPC.
-  publicly_accessible    = true
+  # Legacy Phase 3 database is retained, but no longer publicly reachable.
+  publicly_accessible    = false
   db_subnet_group_name   = aws_db_subnet_group.database.name
   vpc_security_group_ids = [aws_security_group.database.id]
   parameter_group_name   = aws_db_parameter_group.database.name
