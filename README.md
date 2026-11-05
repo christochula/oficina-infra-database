@@ -1,72 +1,27 @@
 # oficina-infra-database
 
-Banco de dados **PostgreSQL gerenciado (Amazon RDS)** da Oficina API, provisionado com **Terraform** e executado no **AWS Academy Learner Lab**.
+Infraestrutura PostgreSQL da Fase 3, preservada para historico e compatibilidade. Na Fase 4 cada servico provisiona e usa seus proprios dados e state Terraform em seu repositorio: OS e Billing usam bancos PostgreSQL independentes; Producao usa DynamoDB. Este banco legado nao e compartilhado pelos novos servicos e nao participa da Saga.
 
-Repositório 2 (de 4) do Tech Challenge Fase 3. Ordem de deploy: `oficina-infra-kubernetes` → **este** → `oficina-auth-serverless` → `oficina-api`.
+## Recursos existentes
 
-## Descrição
+RDS PostgreSQL 16, `db.t3.micro`, storage `gp3` criptografado, senha aleatoria no Secrets Manager e TLS obrigatorio (`rds.force_ssl=1`). O recurso foi mantido com os mesmos nomes/enderecos Terraform; nao ha remocao ou migracao de dados nesta alteracao. Acesso publico foi desabilitado (`publicly_accessible=false`) e ingress PostgreSQL restringido ao CIDR da VPC default. A Lambda de autenticacao consulta a API OS por HTTPS e nao recebe credenciais de banco.
 
-- **Amazon RDS for PostgreSQL 16**, instância `db.t3.micro`, privada (`publicly_accessible = false`), storage `gp3` criptografado com a chave gerenciada `aws/rds`.
-- **VPC default** do Learner Lab (a mesma do cluster EKS). Um security group libera a porta 5432 para o CIDR da VPC — pods do EKS e a Lambda de autenticação conectam direto ao endpoint do RDS.
-- **Parameter group** com `rds.force_ssl=1`, `scram-sha-256` e logging (`log_connections`, `log_min_duration_statement`).
-- **Senha gerada** (`random_password`) e gravada num **AWS Secrets Manager** secret (`oficina/homolog/database/connection`) com o JSON:
-  ```json
-  { "username","password","engine","host","port","dbname","sslmode","url" }
-  ```
-  onde `url` é a connection string Prisma (`...?schema=public&sslmode=require`).
-- **Performance Insights** habilitado (retenção 7 dias, chave default). CloudWatch Logs export de `postgresql`.
+A alteracao de rede sera efetivada apenas apos revisao do plan e execucao de deploy pelo usuario. Conexoes externas ao banco legado deixam de ser aceitas; operacoes administrativas devem partir de um workload autorizado na VPC. Cada servico da Fase 4 usa credencial/secret proprio e nao acessa bancos de outro servico. O isolamento logico nao depende apenas do CIDR de rede.
 
-### Diferenças em relação ao design corporativo (limitações do AWS Academy)
+## Configuracao
 
-O Learner Lab bloqueia `iam:CreateRole`. Por isso foram removidos:
-
-| Removido | Motivo | Alternativa |
-| --- | --- | --- |
-| RDS Proxy | precisa de IAM role própria | conexão direta ao RDS (`sslmode=require`) |
-| Enhanced Monitoring | precisa de `monitoring_role_arn` | `monitoring_interval = 0` |
-| KMS CMK | `kms:CreateKey` não confiável no lab | chave gerenciada `aws/rds` |
-| SGs por referência entre stacks | acoplaria o `plan` ao estado do repo de EKS | ingress pelo CIDR da VPC |
-
-## Tecnologias
-
-Terraform 1.16 · AWS Provider 6.x · Amazon RDS PostgreSQL · AWS Secrets Manager · GitHub Actions.
-
-## Execução local
+Terraform 1.16, AWS Provider 6.x e credenciais Academy ativas. Entradas publicas estao em `variables.tf`; nenhum segredo deve ir para tfvars. O workflow usa GitHub Secrets `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`. O bucket de state e `oficina-tc3-tfstate-REPLACE_ACCOUNT_ID`, key exclusiva `oficina/database/terraform.tfstate`, regiao `us-east-1`, criptografia e lockfile S3.
 
 ```bash
-terraform init \
-  -backend-config="bucket=oficina-tc3-tfstate-$(aws sts get-caller-identity --query Account --output text)" \
-  -backend-config="key=oficina/database/terraform.tfstate" \
-  -backend-config="region=us-east-1"
-terraform plan
-terraform apply
+terraform fmt -check -recursive
+terraform init -backend=false
+terraform validate
 ```
 
-Todos os IDs (VPC, subnets) são derivados da VPC default. Veja `variables.tf`.
+CI valida formato/configuracao e faz plan em PRs internos quando ha credenciais. Deploy verifica formato e configuracao antes do apply. Configurar protecao real de `main` com PR e checks `Validate` e `Plan`; um arquivo `.github/settings.yml` sozinho nao aplica protecao.
 
-## Deploy (CI/CD)
+## Outputs e fronteiras
 
-- `ci.yml` — em PR: `fmt` / `validate` / `plan`. Em push de branch: `validate`.
-- `deploy.yml` — em push para `main` (+ manual): garante o bucket de state e roda `terraform apply`.
+`db_endpoint`, `db_address`, `database_security_group_id`, `secret_name` e `secret_arn` referem-se apenas ao recurso legado. Nao configurar o auth com esses outputs. Os novos bancos/filas/Secrets de OS e Billing pertencem aos respectivos estados Terraform, e a tabela Producao pertence ao repositorio de Producao. O cluster e a unica plataforma compartilhada.
 
-**GitHub Secrets** (renovar a cada sessão do Learner Lab): `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`.
-
-## Outputs (consumidos pelos outros repos)
-
-| Output | Consumidor |
-| --- | --- |
-| `secret_name` / `secret_arn` | `oficina-api` (DATABASE_URL) e `oficina-auth-serverless` (consulta de cliente por CPF) |
-| `db_endpoint` / `db_address` | referência operacional |
-| `database_security_group_id` | referência |
-
-## APIs
-
-Não aplicável — repositório de infraestrutura. Swagger/Postman em `oficina-api`.
-
-## Cleanup
-
-```bash
-terraform destroy
-```
-
-Destruir depois de `oficina-api` e `oficina-auth-serverless`. Sem deletion protection e com `skip_final_snapshot = true` (ambiente de lab).
+A Fase 4 usa seed demonstrativo em bancos novos; nao ha migracao do banco legado. Nao executar `destroy` como parte da preparacao da entrega. As definicoes existentes de lab (`skip_final_snapshot=true`, sem deletion protection) permanecem, sem uso nesta alteracao.
